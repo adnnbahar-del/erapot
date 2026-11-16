@@ -1,0 +1,389 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Firestore Security Rules — E-Rapor SD Kurikulum Merdeka (Generic Model)
+// ─────────────────────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Fungsi Helper Utama (Generic) ────────────────────────────────────────
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && (
+          (request.auth.token.email in ['adnnbahar@gmail.com', 'adnanbahar.ar@gmail.com', 'admin@erapor.local'])
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && 'peran' in me()
+            && me().peran == 'admin'
+            && me().aktif == true
+          )
+        );
+    }
+
+    // Wali kelas valid jika peran wali_kelas, aktif, dan users/{uid}.kelasId == kelasId
+    function isWali(kelasId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && 'peran' in me()
+        && me().peran == 'wali_kelas'
+        && me().aktif == true
+        && 'kelasId' in me()
+        && me().kelasId == kelasId;
+    }
+
+    // Guru mapel valid jika peran guru_mapel, aktif, dan ditugaskan ke kelasId & mapelId
+    function isGuruMapel(kelasId, mapelId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && 'peran' in me()
+        && me().peran == 'guru_mapel'
+        && me().aktif == true
+        && ('kelasIds' in me() && kelasId in me().kelasIds)
+        && ('mapelIds' in me() && mapelId in me().mapelIds);
+    }
+
+    // Resolusi nama field kelasId (mendukung kelasId maupun kelas_id)
+    function getKelas(d) {
+      return ('kelasId' in d) ? d.kelasId : (('kelas_id' in d) ? d.kelas_id : '');
+    }
+
+    function getTA(d) {
+      return ('tahunAjaranId' in d) ? d.tahunAjaranId : (('tahun_ajaran_id' in d) ? d.tahun_ajaran_id : '');
+    }
+
+    function getMapel(d) {
+      return ('mapelId' in d) ? d.mapelId : (('mapel_id' in d) ? d.mapel_id : '');
+    }
+
+    // Status kunci rapor: terkunci jika dokumen statusRapor / finalisasiRapor berstatus 'final'
+    function terkunci(taId, kelasId) {
+      let fin1 = /databases/$(database)/documents/finalisasiRapor/$( 'fin_' + kelasId + '_' + taId );
+      let fin2 = /databases/$(database)/documents/finalisasiRapor/$( kelasId + '_' + taId );
+      let stat1 = /databases/$(database)/documents/statusRapor/$( taId + '_' + kelasId );
+      let stat2 = /databases/$(database)/documents/statusRapor/$( kelasId + '_' + taId );
+      return taId != '' && kelasId != '' && (
+        (exists(fin1) && (get(fin1).data.status == 'final' || get(fin1).data.final == true)) ||
+        (exists(fin2) && (get(fin2).data.status == 'final' || get(fin2).data.final == true)) ||
+        (exists(stat1) && (get(stat1).data.status == 'final' || get(stat1).data.final == true)) ||
+        (exists(stat2) && (get(stat2).data.status == 'final' || get(stat2).data.final == true))
+      );
+    }
+
+    // ── 1. Koleksi Pengaturan Sistem (Kelas, TahunAjaran, Mapel, Sekolah) ────
+    match /kelas/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /tahunAjaran/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /pengaturan/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /sekolah/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /mapel/{id} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (signedIn() && me().peran == 'wali_kelas');
+    }
+
+    // ── 2. Koleksi Akun & Keamanan (users, passwordAwal, logAktivitas, system) ─
+    match /users/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow delete: if isAdmin();
+      // Wali/guru tidak boleh mengubah peran, kelasId, aktif miliknya sendiri
+      allow update: if isAdmin()
+                    || (signedIn() && request.auth.uid == uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nama', 'gelar', 'nip', 'harusGantiPassword', 'updatedAt'])
+                        && (!('harusGantiPassword' in request.resource.data) || request.resource.data.harusGantiPassword == false));
+    }
+
+    match /passwordAwal/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin() || (signedIn() && isWali(id));
+    }
+
+    match /logAktivitas/{id} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && (
+        request.resource.data.uid == request.auth.uid ||
+        request.resource.data.uid == 'anon'
+      );
+      allow update, delete: if false;
+    }
+
+    match /system/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── 3. Koleksi Status Penguncian & Finalisasi Rapor ────────────────────────
+    match /statusRapor/{id} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() || (
+        isWali(getKelas(request.resource.data))
+        && (request.resource.data.status == 'final' || request.resource.data.final == true)
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /finalisasiRapor/{id} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() || (
+        isWali(getKelas(request.resource.data))
+        && (request.resource.data.status == 'final' || request.resource.data.final == true)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ── 4. Koleksi Kurikulum Dasar (TP, LM) ──────────────────────────────────
+    match /tp/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        || (signedIn() && me().aktif == true && (me().peran == 'wali_kelas' || me().peran == 'guru_mapel'));
+    }
+
+    match /tujuanPembelajaran/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        || (signedIn() && me().aktif == true && (me().peran == 'wali_kelas' || me().peran == 'guru_mapel'));
+    }
+
+    match /lm/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        || (signedIn() && me().aktif == true && (me().peran == 'wali_kelas' || me().peran == 'guru_mapel'));
+    }
+
+    match /lingkupMateri/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        || (signedIn() && me().aktif == true && (me().peran == 'wali_kelas' || me().peran == 'guru_mapel'));
+    }
+
+    // ── 5. Koleksi Data Siswa & Rombel ────────────────────────────────────────
+    match /siswa/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || isWali(getKelas(request.resource.data));
+      allow update: if isAdmin() || (
+        isWali(getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+      );
+      allow delete: if isAdmin() || isWali(getKelas(resource.data));
+    }
+
+    match /kelasSiswa/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || isWali(getKelas(request.resource.data));
+      allow update: if isAdmin() || (
+        isWali(getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+      );
+      allow delete: if isAdmin() || isWali(getKelas(resource.data));
+    }
+
+    // ── 6. Koleksi Penilaian & Asesmen ────────────────────────────────────────
+    match /nilai/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && (isWali(getKelas(request.resource.data))
+            || isGuruMapel(getKelas(request.resource.data), getMapel(request.resource.data))));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && (isWali(getKelas(resource.data))
+            || isGuruMapel(getKelas(resource.data), getMapel(resource.data))));
+      allow delete: if isAdmin();
+    }
+
+    match /formatif/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && (isWali(getKelas(request.resource.data))
+            || isGuruMapel(getKelas(request.resource.data), getMapel(request.resource.data))));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && (isWali(getKelas(resource.data))
+            || isGuruMapel(getKelas(resource.data), getMapel(resource.data))));
+      allow delete: if isAdmin();
+    }
+
+    match /sumatifLM/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && (isWali(getKelas(request.resource.data))
+            || isGuruMapel(getKelas(request.resource.data), getMapel(request.resource.data))));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && (isWali(getKelas(resource.data))
+            || isGuruMapel(getKelas(resource.data), getMapel(resource.data))));
+      allow delete: if isAdmin();
+    }
+
+    match /sumatifSemester/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && (isWali(getKelas(request.resource.data))
+            || isGuruMapel(getKelas(request.resource.data), getMapel(request.resource.data))));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && (isWali(getKelas(resource.data))
+            || isGuruMapel(getKelas(resource.data), getMapel(resource.data))));
+      allow delete: if isAdmin();
+    }
+
+    match /nilaiMapel/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && (isWali(getKelas(request.resource.data))
+            || isGuruMapel(getKelas(request.resource.data), getMapel(request.resource.data))));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && (isWali(getKelas(resource.data))
+            || isGuruMapel(getKelas(resource.data), getMapel(resource.data))));
+      allow delete: if isAdmin();
+    }
+
+    // ── 7. Koleksi Kehadiran, Catatan Wali, 7 KAIH ──────────────────────────
+    match /kehadiran/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    match /catatanWali/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    match /kaih/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    // ── 8. Koleksi Kokurikuler & Ekstrakurikuler ─────────────────────────────
+    match /temaKokurikuler/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin() || (
+        !terkunci(getTA(resource.data), getKelas(resource.data))
+        && isWali(getKelas(resource.data)));
+    }
+
+    match /penilaianKokurikuler/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    match /kokurikuler/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    match /ekstrakurikuler/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /nilaiEkskul/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(request.resource.data))
+        && isWali(getKelas(request.resource.data)));
+      allow update: if isAdmin() || (
+        !terkunci(getTA(request.resource.data), getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+        && isWali(getKelas(resource.data)));
+      allow delete: if isAdmin();
+    }
+
+    // ── 9. Koleksi Mutasi & Buku Induk ──────────────────────────────────────
+    match /mutasi/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || isWali(getKelas(request.resource.data));
+      allow update: if isAdmin() || (
+        isWali(getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+      );
+      allow delete: if isAdmin() || isWali(getKelas(resource.data));
+    }
+
+    match /bukuInduk/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || isWali(getKelas(request.resource.data));
+      allow update: if isAdmin() || (
+        isWali(getKelas(resource.data))
+        && getKelas(request.resource.data) == getKelas(resource.data)
+      );
+      allow delete: if isAdmin() || isWali(getKelas(resource.data));
+    }
+  }
+}

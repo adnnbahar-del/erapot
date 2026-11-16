@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "kelas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "aktif",  "order": "ASCENDING" },
+        { "fieldPath": "urutan", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "username", "order": "ASCENDING" },
+        { "fieldPath": "peran",    "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
+
