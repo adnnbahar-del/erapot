@@ -16,7 +16,9 @@ import {
   ArrowRight,
   UserPlus,
   FileSpreadsheet,
+  Download,
 } from 'lucide-react';
+import { unduhTemplateSiswaExcel } from '../lib/excelSiswaService';
 
 export const Dashboard: React.FC = () => {
   const { data, session, isLoading } = useApp();
@@ -385,10 +387,23 @@ export const Dashboard: React.FC = () => {
               + Tambah Siswa Manual
             </button>
             <button
+              onClick={() => {
+                unduhTemplateSiswaExcel({
+                  namaSekolah: data.sekolah?.nama,
+                  namaKelas: session.kelas,
+                  tahunAjaran: session.tahunAjaran,
+                });
+              }}
+              className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-kemdikbud-dark text-xs font-bold border border-blue-200 shadow-xs transition"
+            >
+              <Download size={14} />
+              <span>Unduh Template</span>
+            </button>
+            <button
               onClick={() => navigate('/data-siswa')}
               className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300 transition"
             >
-              Impor dari File Excel (.xlsm)
+              Impor dari File Excel
             </button>
           </div>
         </div>

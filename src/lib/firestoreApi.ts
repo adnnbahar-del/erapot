@@ -337,32 +337,85 @@ export async function handleFirestoreCrud(
   }
 
   if (action === 'importSiswa') {
-    const { kelas_id, siswaList } = payload;
+    const { kelas_id, tahun_ajaran_id, siswaList } = payload;
     if (!siswaList || !siswaList.length) return { count: 0 };
 
-    const batch = writeBatch(db);
-    for (let i = 0; i < siswaList.length; i++) {
-      const s = siswaList[i];
-      const sId = s.id || `s_${Date.now()}_${i}`;
-      batch.set(doc(db, 'siswa', sId), { ...s, id: sId, kelasId: kelas_id, kelas_id }, { merge: true });
+    // Batch chunking (maksimal 200 siswa = 400 dokumen per batch, di bawah limit 500 Firestore)
+    const CHUNK_SIZE = 200;
+    let totalWritten = 0;
 
-      const ksId = `ks_${kelas_id}_${sId}`;
-      batch.set(
-        doc(db, 'kelasSiswa', ksId),
-        {
+    for (let chunkStart = 0; chunkStart < siswaList.length; chunkStart += CHUNK_SIZE) {
+      const chunk = siswaList.slice(chunkStart, chunkStart + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      for (let i = 0; i < chunk.length; i++) {
+        const s = chunk[i];
+        const sId = s.id || s.existingSiswaId || `s_${Date.now()}_${chunkStart + i}_${Math.random().toString(36).slice(2, 6)}`;
+
+        const cleanSiswa = {
+          id: sId,
+          kelasId: kelas_id,
+          kelas_id: kelas_id,
+          tahun_ajaran_id: tahun_ajaran_id || '',
+          nis: s.nis || '',
+          nisn: s.nisn || '',
+          nama: s.nama || '',
+          jk: s.jk || 'L',
+          tempat_lahir: s.tempat_lahir || '',
+          tanggal_lahir: s.tanggal_lahir || '',
+          agama: s.agama || 'Islam',
+          pendidikan_sebelumnya: s.pendidikan_sebelumnya || 'TK / RA',
+          alamat: s.alamat || '',
+          nama_ayah: s.nama_ayah || '',
+          pekerjaan_ayah: s.pekerjaan_ayah || '',
+          nama_ibu: s.nama_ibu || '',
+          pekerjaan_ibu: s.pekerjaan_ibu || '',
+          alamat_ortu_jalan: s.alamat_ortu_jalan || '',
+          alamat_ortu_desa: s.alamat_ortu_desa || '',
+          alamat_ortu_kecamatan: s.alamat_ortu_kecamatan || '',
+          alamat_ortu_kabupaten: s.alamat_ortu_kabupaten || '',
+          alamat_ortu_provinsi: s.alamat_ortu_provinsi || '',
+          nama_wali: s.nama_wali || '',
+          pekerjaan_wali: s.pekerjaan_wali || '',
+          alamat_wali: s.alamat_wali || '',
+          telepon: s.telepon || '',
+          catatan: s.catatan || '',
+          ekstrakurikuler: s.ekstrakurikuler || [],
+          updated_at: new Date().toISOString(),
+        };
+
+        batch.set(doc(db, 'siswa', sId), sanitizePayload(cleanSiswa), { merge: true });
+
+        const ksId = `ks_${kelas_id}_${sId}`;
+        const cleanKelasSiswa = {
           id: ksId,
           siswa_id: sId,
           kelas_id,
           kelasId: kelas_id,
           rombel_id: kelas_id,
-          no_urut: s.no_urut || i + 1,
+          tahun_ajaran_id: tahun_ajaran_id || '',
+          no_urut: s.no_urut || (chunkStart + i + 1),
           aktif: true,
-        },
-        { merge: true }
-      );
+          tinggi_badan: s.tinggi_badan !== undefined && s.tinggi_badan !== null && s.tinggi_badan !== '' ? String(s.tinggi_badan) : '',
+          berat_badan: s.berat_badan !== undefined && s.berat_badan !== null && s.berat_badan !== '' ? String(s.berat_badan) : '',
+          pendengaran: s.pendengaran || 'Baik',
+          penglihatan: s.penglihatan || 'Baik',
+          gigi: s.gigi || 'Baik',
+          kesehatan_lain: s.kesehatan_lain || '',
+          prestasi_kesenian: s.prestasi_kesenian || '',
+          prestasi_olahraga: s.prestasi_olahraga || '',
+          prestasi_sains: s.prestasi_sains || '',
+          updated_at: new Date().toISOString(),
+        };
+
+        batch.set(doc(db, 'kelasSiswa', ksId), sanitizePayload(cleanKelasSiswa), { merge: true });
+        totalWritten += 2;
+      }
+
+      await batch.commit();
     }
-    await batch.commit();
-    tambahEstimasiTulis(siswaList.length * 2);
+
+    tambahEstimasiTulis(totalWritten);
     return { count: siswaList.length };
   }
 

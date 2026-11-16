@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Siswa, KelasSiswa, JenisKelamin } from '../types';
-import * as XLSX from 'xlsx';
 import {
   Users,
   UserPlus,
@@ -14,7 +13,19 @@ import {
   AlertTriangle,
   Upload,
   CheckCircle,
+  Download,
+  FileDown,
+  Info,
+  AlertCircle,
+  Check,
 } from 'lucide-react';
+import {
+  unduhTemplateSiswaExcel,
+  eksporDataSiswaExcel,
+  validasiBerkasSiswaExcel,
+  unduhDaftarBarisBermasalah,
+  HasilValidasiImportSiswa,
+} from '../lib/excelSiswaService';
 
 export const DataSiswa: React.FC = () => {
   const { data, session, addSiswa, updateSiswa, deleteSiswa, importSiswaList, notify, confirmModal } = useApp();
@@ -67,8 +78,10 @@ export const DataSiswa: React.FC = () => {
 
   // Import Excel State
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [importPreview, setImportPreview] = useState<any[]>([]);
-  const [importIgnoredCount, setImportIgnoredCount] = useState(0);
+  const [validationResult, setValidationResult] = useState<HasilValidasiImportSiswa | null>(null);
+  const [rawFileBuffer, setRawFileBuffer] = useState<ArrayBuffer | null>(null);
+  const [allowUpdateExisting, setAllowUpdateExisting] = useState(true);
+  const [importTab, setImportTab] = useState<'all' | 'valid' | 'invalid'>('all');
   const [isImporting, setIsImporting] = useState(false);
 
   if (!data || !session) return null;
@@ -229,146 +242,61 @@ export const DataSiswa: React.FC = () => {
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-
-        // Cari sheet 'DATA SISWA' atau sheet pertama
-        let targetSheetName = wb.SheetNames.find(
-          (name) => name.toUpperCase().replace(/\s+/g, '') === 'DATASISWA'
+        const buffer = evt.target?.result as ArrayBuffer;
+        setRawFileBuffer(buffer);
+        const result = validasiBerkasSiswaExcel(
+          buffer,
+          enrolledStudents,
+          studentCount,
+          maxStudents,
+          allowUpdateExisting
         );
-        if (!targetSheetName) targetSheetName = wb.SheetNames[0];
-
-        const sheet = wb.Sheets[targetSheetName];
-        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-        // Cari baris header yang memuat 'NAMA PESERTA DIDIK' atau 'NAMA'
-        let headerRowIndex = -1;
-        for (let r = 0; r < Math.min(rawRows.length, 20); r++) {
-          const row = rawRows[r];
-          if (
-            row &&
-            row.some((cell: any) =>
-              String(cell || '').toUpperCase().includes('NAMA')
-            )
-          ) {
-            headerRowIndex = r;
-            break;
-          }
-        }
-
-        if (headerRowIndex === -1) {
-          throw new Error("Tidak dapat menemukan kolom header 'NAMA PESERTA DIDIK' pada file Excel.");
-        }
-
-        const headers: string[] = rawRows[headerRowIndex].map((h) =>
-          String(h || '').trim().toUpperCase()
-        );
-
-        // Petakan kolom berdasarkan nama header (bukan posisi tetap!)
-        const colMap: Record<string, number> = {};
-        headers.forEach((h, idx) => {
-          if (h.includes('NISN')) colMap['nisn'] = idx;
-          else if (h.includes('NIS')) colMap['nis'] = idx;
-          else if (h.includes('NAMA')) colMap['nama'] = idx;
-          else if (h.includes('L/P') || h.includes('JK') || h.includes('KELAMIN')) colMap['jk'] = idx;
-          else if (h.includes('TEMPAT LAHIR') || h.includes('TEMPAT')) colMap['tempat_lahir'] = idx;
-          else if (h.includes('TANGGAL LAHIR') || h.includes('TGL')) colMap['tanggal_lahir'] = idx;
-          else if (h.includes('AGAMA')) colMap['agama'] = idx;
-          else if (h.includes('PENDIDIKAN')) colMap['pendidikan_sebelumnya'] = idx;
-          else if (h.includes('ALAMAT PESERTA') || (h.includes('ALAMAT') && !h.includes('ORTU') && !h.includes('WALI'))) colMap['alamat'] = idx;
-          else if (h.includes('AYAH') && !h.includes('PEKERJAAN')) colMap['nama_ayah'] = idx;
-          else if (h.includes('IBU') && !h.includes('PEKERJAAN')) colMap['nama_ibu'] = idx;
-          else if (h.includes('PEKERJAAN AYAH')) colMap['pekerjaan_ayah'] = idx;
-          else if (h.includes('PEKERJAAN IBU')) colMap['pekerjaan_ibu'] = idx;
-          else if (h.includes('JALAN')) colMap['alamat_ortu_jalan'] = idx;
-          else if (h.includes('DESA') || h.includes('KELURAHAN')) colMap['alamat_ortu_desa'] = idx;
-          else if (h.includes('KECAMATAN')) colMap['alamat_ortu_kecamatan'] = idx;
-          else if (h.includes('KABUPATEN') || h.includes('KOTA')) colMap['alamat_ortu_kabupaten'] = idx;
-          else if (h.includes('PROVINSI')) colMap['alamat_ortu_provinsi'] = idx;
-          else if (h.includes('WALI') && !h.includes('PEKERJAAN') && !h.includes('ALAMAT')) colMap['nama_wali'] = idx;
-          else if (h.includes('PEKERJAAN WALI')) colMap['pekerjaan_wali'] = idx;
-          else if (h.includes('ALAMAT WALI')) colMap['alamat_wali'] = idx;
-          else if (h.includes('TELEPON') || h.includes('HP') || h.includes('KONTAK')) colMap['telepon'] = idx;
-        });
-
-        const parsedList: any[] = [];
-        for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
-          const row = rawRows[r];
-          if (!row || row.length === 0) continue;
-
-          const rawNama = row[colMap['nama']];
-          if (!rawNama || String(rawNama).trim() === '' || String(rawNama).trim() === '0') {
-            continue; // Lewati baris kosong atau nama '0'
-          }
-
-          let rawJK = String(row[colMap['jk']] || 'L').trim().toUpperCase();
-          if (rawJK.startsWith('P') || rawJK.includes('PEREMPUAN')) rawJK = 'P';
-          else rawJK = 'L';
-
-          let rawNisn = String(row[colMap['nisn']] || '').trim();
-          // Pad or clean string
-          if (rawNisn === '0') rawNisn = '';
-
-          parsedList.push({
-            nama: String(rawNama).trim(),
-            nis: String(row[colMap['nis']] || '').trim(),
-            nisn: rawNisn,
-            jk: rawJK as JenisKelamin,
-            tempat_lahir: String(row[colMap['tempat_lahir']] || '').trim(),
-            tanggal_lahir: String(row[colMap['tanggal_lahir']] || '').trim(),
-            agama: String(row[colMap['agama']] || 'Islam').trim(),
-            pendidikan_sebelumnya: String(row[colMap['pendidikan_sebelumnya']] || '').trim(),
-            alamat: String(row[colMap['alamat']] || '').trim(),
-            nama_ayah: String(row[colMap['nama_ayah']] || '').trim(),
-            nama_ibu: String(row[colMap['nama_ibu']] || '').trim(),
-            pekerjaan_ayah: String(row[colMap['pekerjaan_ayah']] || '').trim(),
-            pekerjaan_ibu: String(row[colMap['pekerjaan_ibu']] || '').trim(),
-            alamat_ortu_jalan: String(row[colMap['alamat_ortu_jalan']] || '').trim(),
-            alamat_ortu_desa: String(row[colMap['alamat_ortu_desa']] || '').trim(),
-            alamat_ortu_kecamatan: String(row[colMap['alamat_ortu_kecamatan']] || '').trim(),
-            alamat_ortu_kabupaten: String(row[colMap['alamat_ortu_kabupaten']] || '').trim(),
-            alamat_ortu_provinsi: String(row[colMap['alamat_ortu_provinsi']] || '').trim(),
-            nama_wali: String(row[colMap['nama_wali']] || '').trim(),
-            pekerjaan_wali: String(row[colMap['pekerjaan_wali']] || '').trim(),
-            alamat_wali: String(row[colMap['alamat_wali']] || '').trim(),
-            telepon: String(row[colMap['telepon']] || '').trim(),
-          });
-        }
-
-        // Limit to available slot up to 50
-        const availableSlots = maxStudents - studentCount;
-        if (availableSlots <= 0) {
-          notify(`Kelas ${session.kelas} sudah penuh (50 siswa).`, 'error');
-          return;
-        }
-
-        const validBatch = parsedList.slice(0, availableSlots);
-        const ignored = parsedList.length - validBatch.length;
-
-        setImportPreview(validBatch);
-        setImportIgnoredCount(ignored);
+        setValidationResult(result);
+        setImportTab(result.invalidCount > 0 && result.validCount === 0 ? 'invalid' : 'all');
         setImportModalOpen(true);
       } catch (err: any) {
-        notify(err.message || 'Gagal membaca file Excel', 'error');
+        notify(err.message || 'Gagal membaca berkas Excel.', 'error');
       }
     };
-    reader.readAsBinaryString(file);
-    // Reset file input
+    reader.readAsArrayBuffer(file);
     e.target.value = '';
   };
 
+  const handleToggleUpdateExisting = (checked: boolean) => {
+    setAllowUpdateExisting(checked);
+    if (rawFileBuffer) {
+      try {
+        const result = validasiBerkasSiswaExcel(
+          rawFileBuffer,
+          enrolledStudents,
+          studentCount,
+          maxStudents,
+          checked
+        );
+        setValidationResult(result);
+      } catch {}
+    }
+  };
+
   const handleConfirmImport = async () => {
-    if (importPreview.length === 0) return;
+    if (!validationResult || validationResult.validRows.length === 0) return;
     setIsImporting(true);
     try {
-      await importSiswaList(importPreview);
+      await importSiswaList(validationResult.validRows);
       setImportModalOpen(false);
-      setImportPreview([]);
+      setValidationResult(null);
+      setRawFileBuffer(null);
     } catch (err: any) {
       notify(err.message || 'Gagal mengimpor siswa', 'error');
     } finally {
       setIsImporting(false);
     }
+  };
+
+  const handleDownloadInvalid = () => {
+    if (!validationResult || validationResult.invalidRows.length === 0) return;
+    unduhDaftarBarisBermasalah(validationResult.invalidRows, session.kelas);
+    notify('Daftar baris bermasalah berhasil diunduh.', 'success');
   };
 
   return (
@@ -409,8 +337,47 @@ export const DataSiswa: React.FC = () => {
             />
           </div>
 
-          {/* Import Excel */}
-          <label className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300 cursor-pointer shadow-xs transition">
+          {/* Unduh Template */}
+          <button
+            type="button"
+            onClick={() => {
+              unduhTemplateSiswaExcel({
+                namaSekolah: data.sekolah?.nama,
+                namaKelas: session.kelas,
+                tahunAjaran: session.tahunAjaran,
+              });
+              notify('Template Excel Data Siswa berhasil diunduh.', 'success');
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-kemdikbud-dark text-xs font-bold border border-blue-200 shadow-xs transition"
+            title="Unduh Template Excel untuk mengisi data siswa secara massal"
+          >
+            <Download size={15} />
+            <span>Unduh Template</span>
+          </button>
+
+          {/* Ekspor Excel */}
+          <button
+            type="button"
+            disabled={enrolledStudents.length === 0}
+            onClick={() => {
+              eksporDataSiswaExcel({
+                namaSekolah: data.sekolah?.nama || 'SD',
+                namaKelas: session.kelas,
+                tahunAjaran: session.tahunAjaran,
+                siswaList: enrolledStudents,
+                kelasSiswaList: currentClassRoster,
+              });
+              notify('Data siswa berhasil diekspor ke Excel.', 'success');
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300 shadow-xs transition disabled:opacity-50"
+            title="Ekspor data siswa kelas saat ini ke format Excel"
+          >
+            <FileDown size={15} className="text-blue-600" />
+            <span>Ekspor Excel</span>
+          </button>
+
+          {/* Impor Excel */}
+          <label className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-300 cursor-pointer shadow-xs transition">
             <FileSpreadsheet size={15} className="text-emerald-600" />
             <span>Impor Excel</span>
             <input
@@ -515,11 +482,38 @@ export const DataSiswa: React.FC = () => {
                         ? 'Tidak ada siswa yang sesuai pencarian.'
                         : 'Belum ada siswa di kelas ini.'}
                     </p>
-                    <p className="text-xs text-slate-400 mt-1">
+                    <p className="text-xs text-slate-400 mt-1 mb-4">
                       {searchQuery
                         ? 'Coba gunakan kata kunci pencarian yang lain.'
-                        : 'Klik tombol "+ Tambah Siswa" atau "Impor Excel" di atas untuk menambahkan data.'}
+                        : 'Mulai dengan mengunduh template Excel, menambah manual, atau mengimpor data.'}
                     </p>
+                    {!searchQuery && (
+                      <div className="flex flex-wrap items-center justify-center gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            unduhTemplateSiswaExcel({
+                              namaSekolah: data.sekolah?.nama,
+                              namaKelas: session.kelas,
+                              tahunAjaran: session.tahunAjaran,
+                            });
+                            notify('Template Excel Data Siswa berhasil diunduh.', 'success');
+                          }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-kemdikbud-dark text-xs font-bold border border-blue-200 transition"
+                        >
+                          <Download size={14} />
+                          <span>Unduh Template</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleOpenAddModal}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-kemdikbud-dark hover:bg-kemdikbud-hover text-white text-xs font-bold shadow-xs transition"
+                        >
+                          <UserPlus size={14} />
+                          <span>Tambah Siswa</span>
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )}
@@ -869,82 +863,330 @@ export const DataSiswa: React.FC = () => {
       )}
 
       {/* MODAL: Pratinjau Impor Excel */}
-      {importModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full p-6 border border-slate-200 overflow-hidden">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <CheckCircle size={18} className="text-emerald-600" />
-                  <span>Pratinjau Impor Siswa dari Excel</span>
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Siap menambahkan {importPreview.length} siswa ke Kelas {session.kelas}.
-                </p>
+      {importModalOpen && validationResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                  <FileSpreadsheet size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Pratinjau Impor Data Siswa
+                  </h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Kelas {session.kelas} · {session.tahunAjaran} · Deteksi Header Otomatis
+                  </p>
+                </div>
               </div>
-              <button
-                onClick={() => setImportModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    unduhTemplateSiswaExcel({
+                      namaSekolah: data.sekolah?.nama,
+                      namaKelas: session.kelas,
+                      tahunAjaran: session.tahunAjaran,
+                    });
+                    notify('Template Excel Data Siswa berhasil diunduh.', 'success');
+                  }}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/20 transition"
+                  title="Unduh format template resmi jika diperlukan"
+                >
+                  <Download size={13} />
+                  <span>Unduh Template</span>
+                </button>
+                <button
+                  onClick={() => setImportModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
-            {importIgnoredCount > 0 && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-xs">
-                <AlertTriangle size={16} className="shrink-0" />
-                <span>
-                  Perhatian: Terdapat {importIgnoredCount} baris siswa yang dilewati karena batas maksimal kelas adalah 50 siswa.
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {/* Stat Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Baris File</div>
+                  <div className="text-xl font-bold text-slate-800 mt-1 tabular-nums">{validationResult.totalRows}</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">Baris data terdeteksi</div>
+                </div>
+
+                <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl">
+                  <div className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+                    <CheckCircle size={13} />
+                    <span>Baris Valid</span>
+                  </div>
+                  <div className="text-xl font-bold text-emerald-800 mt-1 tabular-nums">{validationResult.validCount}</div>
+                  <div className="text-[11px] text-emerald-600 mt-0.5">Siap disimpan ke kelas</div>
+                </div>
+
+                <div className="p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl">
+                  <div className="text-[11px] font-semibold text-rose-700 uppercase tracking-wider flex items-center gap-1">
+                    <AlertCircle size={13} />
+                    <span>Bermasalah</span>
+                  </div>
+                  <div className="text-xl font-bold text-rose-800 mt-1 tabular-nums">{validationResult.invalidCount}</div>
+                  <div className="text-[11px] text-rose-600 mt-0.5">Tidak dapat diimpor</div>
+                </div>
+
+                <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl">
+                  <div className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                    <Info size={13} />
+                    <span>Keterangan</span>
+                  </div>
+                  <div className="text-sm font-bold text-blue-900 mt-1">
+                    {validationResult.existingCount > 0
+                      ? `${validationResult.existingCount} siswa lama`
+                      : 'Semua siswa baru'}
+                  </div>
+                  <div className="text-[11px] text-blue-600 mt-0.5">
+                    {validationResult.exampleCount > 0
+                      ? `${validationResult.exampleCount} baris contoh diabaikan`
+                      : 'Tidak ada baris contoh'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Alert Kuota atau Contoh jika ada */}
+              {validationResult.quotaExceededCount > 0 && (
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-amber-900 text-xs">
+                  <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Batas Kuota Kelas:</span> Terdapat{' '}
+                    <span className="font-bold">{validationResult.quotaExceededCount}</span> siswa yang melebihi kapasitas maksimal kelas ({maxStudents} siswa). Baris-baris tersebut otomatis ditolak.
+                  </div>
+                </div>
+              )}
+
+              {/* Toggle Opsi: Perbarui Siswa Eksisting */}
+              {validationResult.existingCount > 0 && (
+                <div className="p-3.5 bg-blue-50/50 border border-blue-200/80 rounded-xl flex items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Info size={16} className="text-blue-600 shrink-0" />
+                    <span className="text-slate-700">
+                      Terdeteksi <strong className="text-blue-900">{validationResult.existingCount} siswa</strong> dengan NISN yang sudah terdaftar di kelas ini.
+                    </span>
+                  </div>
+                  <label className="inline-flex items-center gap-2 cursor-pointer shrink-0 font-semibold text-blue-900 select-none">
+                    <input
+                      type="checkbox"
+                      checked={allowUpdateExisting}
+                      onChange={(e) => handleToggleUpdateExisting(e.target.checked)}
+                      className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300"
+                    />
+                    <span>Perbarui data siswa yang sudah ada</span>
+                  </label>
+                </div>
+              )}
+
+              {/* Filter Tabs */}
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setImportTab('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      importTab === 'all'
+                        ? 'bg-slate-800 text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Semua ({validationResult.totalRows})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportTab('valid')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      importTab === 'valid'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    Hanya Valid ({validationResult.validCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportTab('invalid')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      importTab === 'invalid'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : 'text-rose-700 hover:bg-rose-50'
+                    }`}
+                  >
+                    Bermasalah ({validationResult.invalidCount})
+                  </button>
+                </div>
+
+                <span className="text-[11px] text-slate-400 hidden sm:inline">
+                  Baris berwarna hijau siap diimpor; baris merah memiliki catatan perbaikan.
                 </span>
               </div>
-            )}
 
-            <div className="overflow-x-auto max-h-72 border border-slate-200 rounded-xl">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                    <th className="py-2.5 px-3 text-center">No</th>
-                    <th className="py-2.5 px-3">Nama Peserta Didik</th>
-                    <th className="py-2.5 px-3">NIS</th>
-                    <th className="py-2.5 px-3">NISN</th>
-                    <th className="py-2.5 px-3 text-center">L/P</th>
-                    <th className="py-2.5 px-3">Tempat, Tanggal Lahir</th>
-                    <th className="py-2.5 px-3">Nama Orang Tua</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {importPreview.map((s, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/70">
-                      <td className="py-2 px-3 text-center text-slate-500">{idx + 1}</td>
-                      <td className="py-2 px-3 font-bold text-slate-900">{s.nama}</td>
-                      <td className="py-2 px-3 tabular-nums">{s.nis || '-'}</td>
-                      <td className="py-2 px-3 tabular-nums font-semibold">{s.nisn || '-'}</td>
-                      <td className="py-2 px-3 text-center">{s.jk}</td>
-                      <td className="py-2 px-3">{s.tempat_lahir}, {s.tanggal_lahir}</td>
-                      <td className="py-2 px-3">{s.nama_ayah || s.nama_ibu || '-'}</td>
+              {/* Preview Table */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3 text-center w-12">No</th>
+                      <th className="py-2.5 px-3 text-center w-28">Status</th>
+                      <th className="py-2.5 px-3">Nama Lengkap</th>
+                      <th className="py-2.5 px-3 text-center w-12">L/P</th>
+                      <th className="py-2.5 px-3">NIS</th>
+                      <th className="py-2.5 px-3">NISN</th>
+                      <th className="py-2.5 px-3">Tempat, Tgl Lahir</th>
+                      <th className="py-2.5 px-3">Catatan / Alasan Masalah</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {(importTab === 'valid'
+                      ? validationResult.validRows
+                      : importTab === 'invalid'
+                      ? validationResult.invalidRows
+                      : validationResult.rows
+                    ).map((r, idx) => (
+                      <tr
+                        key={idx}
+                        className={`transition ${
+                          r.isValid
+                            ? 'hover:bg-emerald-50/40 bg-emerald-50/15'
+                            : 'hover:bg-rose-50/60 bg-rose-50/30'
+                        }`}
+                      >
+                        <td className="py-2.5 px-3 text-center text-slate-500 tabular-nums">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          {r.isValid ? (
+                            r.isExisting ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                                <Check size={11} />
+                                <span>Perbarui</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                <Check size={11} />
+                                <span>Valid</span>
+                              </span>
+                            )
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                              <AlertCircle size={11} />
+                              <span>Bermasalah</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">
+                          {r.nama || <span className="text-red-500 italic">(kosong)</span>}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-bold">
+                          {r.jk ? (
+                            <span
+                              className={`inline-block px-1.5 py-0.5 rounded text-[10px] ${
+                                r.jk === 'L'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {r.jk}
+                            </span>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums font-mono text-slate-600">
+                          {r.nis || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 tabular-nums font-mono font-semibold text-slate-800">
+                          {r.nisn || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600">
+                          {r.tempat_lahir ? `${r.tempat_lahir}, ` : ''}
+                          {r.tanggal_lahir_raw || '-'}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {r.isValid ? (
+                            <span className="text-emerald-700 text-[11px] font-medium">
+                              {r.isExisting
+                                ? 'Data siswa akan diperbarui'
+                                : 'Siap ditambahkan sebagai siswa baru'}
+                            </span>
+                          ) : (
+                            <div className="space-y-0.5">
+                              {r.errors.map((err, eIdx) => (
+                                <div key={eIdx} className="text-rose-700 text-[11px] font-semibold flex items-center gap-1">
+                                  <span>•</span>
+                                  <span>{err}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                type="button"
-                onClick={() => setImportModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                disabled={isImporting}
-                onClick={handleConfirmImport}
-                className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow transition disabled:opacity-50"
-              >
-                <Upload size={14} />
-                <span>{isImporting ? 'Menyimpan ke Database…' : `Konfirmasi Simpan ${importPreview.length} Siswa`}</span>
-              </button>
+            {/* Modal Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="text-xs text-slate-500">
+                {validationResult.validCount > 0 ? (
+                  <span>
+                    Klik tombol simpan untuk memasukkan{' '}
+                    <strong className="text-slate-800 font-bold">
+                      {validationResult.validCount} siswa valid
+                    </strong>{' '}
+                    ke database kelas.
+                  </span>
+                ) : (
+                  <span className="text-rose-600 font-semibold">
+                    Tidak ada baris siswa valid untuk diimpor. Silakan periksa berkas Excel Anda.
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setImportModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition"
+                >
+                  Batal
+                </button>
+
+                {validationResult.invalidCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadInvalid}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 shadow-xs transition"
+                    title="Unduh berkas Excel yang hanya berisi baris-baris bermasalah beserta kolom alasan"
+                  >
+                    <Download size={14} />
+                    <span>Unduh Baris Bermasalah ({validationResult.invalidCount})</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={validationResult.validCount === 0 || isImporting}
+                  onClick={handleConfirmImport}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Upload size={14} />
+                  <span>
+                    {isImporting
+                      ? 'Menyimpan ke Database…'
+                      : `Simpan ${validationResult.validCount} Siswa Valid`}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

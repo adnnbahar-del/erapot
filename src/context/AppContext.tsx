@@ -460,9 +460,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const importSiswaList = async (siswaList: any[]) => {
     if (!data || !session) return;
-    await callApi('importSiswa', { kelas_id: session.kelasId, siswaList });
+    const activeTA = data.tahunAjaran?.find((ta) => ta.aktif);
+    await callApi('importSiswa', {
+      kelas_id: session.kelasId,
+      tahun_ajaran_id: activeTA?.id || data.activeTahunAjaranId || '',
+      siswaList,
+    });
+
+    // Catat satu entri log aktivitas untuk seluruh impor (bukan per siswa)
+    catatLogAktivitas({
+      uid: session.username || 'wali_kelas',
+      nama: session.namaWali || session.username || 'Wali Kelas',
+      peran: session.peran || 'wali_kelas',
+      aksi: 'Impor Siswa',
+      target: `Kelas ${session.kelas} (${siswaList.length} siswa)`,
+      nilaiBaru: `${siswaList.length} siswa diimpor ke Kelas ${session.kelas}`,
+      kelasId: session.kelasId,
+    });
+
     await refreshData();
-    notify(`Berhasil mengimpor ${siswaList.length} siswa.`, 'success');
+    notify(`Berhasil mengimpor ${siswaList.length} siswa ke Kelas ${session.kelas}.`, 'success');
   };
 
   // Kurikulum Handlers
