@@ -4,6 +4,7 @@
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
+    "site": "e-rapot-sd",
     "public": "dist",
     "ignore": [
       "firebase.json",
