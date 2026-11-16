@@ -48,7 +48,10 @@ export const DashboardSekolah: React.FC = () => {
   const kelasSiswaList = data.kelasSiswa || [];
 
   const totalSiswa = siswaList.length;
-  const activeTahun = data.tahunAjaran.find((t) => t.id === data.activeTahunAjaranId) || data.tahunAjaran[0];
+  const activeTahun =
+    (data.tahunAjaran || []).find((t) => t.aktif) ||
+    (data.tahunAjaran || []).find((t) => t.id === data.activeTahunAjaranId) ||
+    data.tahunAjaran[0];
 
   // Helper buka kelas dalam mode lihat
   const handleOpenClassView = (r: Rombel) => {
@@ -113,7 +116,7 @@ export const DashboardSekolah: React.FC = () => {
           <div className="bg-white/10 border border-white/20 backdrop-blur-xs px-4 py-2 rounded-xl text-right">
             <span className="text-[10px] uppercase font-bold text-blue-200 block">Tahun Ajaran Aktif</span>
             <span className="text-sm font-bold text-white">
-              {activeTahun?.tahun} · Semester {activeTahun?.semester === 1 ? 'Ganjil' : 'Genap'}
+              {activeTahun?.tahun} · Semester {activeTahun?.semester === 1 || activeTahun?.semester === 'Ganjil' ? 'Ganjil' : 'Genap'}
             </span>
           </div>
         </div>

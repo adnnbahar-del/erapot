@@ -21,6 +21,7 @@ interface LoginCardProps {
   onSelectRombel: (rombelNama: string) => void;
   semesterLabel?: string;
   isLoadingSemester?: boolean;
+  isSemesterValid?: boolean;
   guruPassword: string;
   onChangeGuruPassword: (val: string) => void;
   onSubmitGuru: (e: React.FormEvent) => void;
@@ -52,6 +53,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
   onSelectRombel,
   semesterLabel,
   isLoadingSemester,
+  isSemesterValid,
   guruPassword,
   onChangeGuruPassword,
   onSubmitGuru,
@@ -120,6 +122,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
           onSelectRombel={onSelectRombel}
           semesterLabel={semesterLabel}
           isLoadingSemester={isLoadingSemester}
+          isSemesterValid={isSemesterValid}
           password={guruPassword}
           onChangePassword={onChangeGuruPassword}
           onSubmit={onSubmitGuru}
@@ -138,6 +141,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
           isSubmitting={isSubmitting}
           hasUserError={focusedErrorField === 'gmUser'}
           hasPasswordError={focusedErrorField === 'gmPass'}
+          isSemesterValid={isSemesterValid}
         />
       )}
 
@@ -151,6 +155,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
           isSubmitting={isSubmitting}
           hasUserError={focusedErrorField === 'adminUser'}
           hasPasswordError={focusedErrorField === 'adminPass'}
+          isSemesterValid={isSemesterValid}
         />
       )}
     </div>

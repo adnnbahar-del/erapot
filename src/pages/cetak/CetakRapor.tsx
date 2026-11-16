@@ -58,7 +58,7 @@ export const CetakRapor: React.FC = () => {
 
   const loadFinalisasi = async () => {
     if (!session?.kelasId) return;
-    const currentTAId = session.tahunAjaranId || 'ta_2025_1';
+    const currentTAId = session.tahunAjaranId || data?.activeTahunAjaranId || '';
     try {
       const res = await getStatusFinalisasi(session.kelasId, currentTAId);
       setFinalisasiInfo(res);
@@ -71,7 +71,7 @@ export const CetakRapor: React.FC = () => {
 
   const handleFinalkanRapor = async () => {
     if (!session?.kelasId) return;
-    const currentTAId = session.tahunAjaranId || 'ta_2025_1';
+    const currentTAId = session.tahunAjaranId || data?.activeTahunAjaranId || '';
     setIsFinalizing(true);
     try {
       const res = await finalkanRaporKelas({

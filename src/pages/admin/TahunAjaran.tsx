@@ -17,6 +17,8 @@ import {
   Clock,
   Archive,
   Info,
+  AlertTriangle,
+  PowerOff,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -24,6 +26,7 @@ import {
   setTahunAjaranAktif,
   tambahTahunAjaran,
   updateStatusTahunAjaran,
+  nonaktifkanSemuaTahunAjaran,
   type TahunAjaranDoc,
 } from '../../lib/tahunAjaranService';
 import type { SemesterNama, StatusTahunAjaran } from '../../types';
@@ -59,7 +62,7 @@ export const TahunAjaran: React.FC = () => {
   }, []);
 
   const handleSetAktif = (item: TahunAjaranDoc) => {
-    if (item.aktif) return;
+    if (item.aktif && activeList.length === 1) return;
 
     confirmModal(
       'Aktifkan Tahun Ajaran',
@@ -134,7 +137,24 @@ export const TahunAjaran: React.FC = () => {
     }
   };
 
-  const activeItem = taList.find((it) => it.aktif);
+  const activeList = taList.filter((it) => it.aktif);
+  const activeItem = activeList[0];
+
+  const handleNonaktifkanSemua = () => {
+    confirmModal(
+      'Nonaktifkan Semua Tahun Ajaran (Uji Validasi)',
+      'Apakah Anda yakin ingin menonaktifkan seluruh tahun ajaran? Halaman login akan menampilkan peringatan "Tahun ajaran belum diatur — hubungi admin" dan tombol Masuk akan diblokir.',
+      async () => {
+        try {
+          await nonaktifkanSemuaTahunAjaran();
+          notify('Semua tahun ajaran telah dinonaktifkan.', 'info');
+          await loadData();
+        } catch (err: any) {
+          notify(err.message || 'Gagal menonaktifkan tahun ajaran.', 'error');
+        }
+      }
+    );
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -151,6 +171,16 @@ export const TahunAjaran: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {activeList.length > 0 && (
+            <button
+              onClick={handleNonaktifkanSemua}
+              title="Nonaktifkan Semua (Uji Validasi)"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-semibold transition cursor-pointer"
+            >
+              <PowerOff size={14} />
+              <span>Matikan Semua (Uji)</span>
+            </button>
+          )}
           <button
             onClick={loadData}
             title="Muat Ulang"
@@ -170,6 +200,65 @@ export const TahunAjaran: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Peringatan: Data Ganda (Jika ada lebih dari 1 dokumen aktif) */}
+      {activeList.length > 1 && (
+        <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-5 shadow-sm space-y-3 animate-pulse">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-amber-950">
+                Perhatian: Ditemukan {activeList.length} Tahun Ajaran yang Aktif Bersamaan!
+              </h3>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Sistem mengharuskan hanya <strong>1 dokumen</strong> yang aktif. Silakan pilih salah satu tahun ajaran di bawah ini untuk ditetapkan sebagai satu-satunya periode aktif:
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            {activeList.map((item) => (
+              <div
+                key={item.id}
+                className="p-3 bg-white border border-amber-300 rounded-xl flex items-center justify-between gap-2"
+              >
+                <div>
+                  <div className="font-bold text-slate-800 text-xs">
+                    Tahun {item.tahun} · Semester {item.semester}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">{item.id}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSetAktif(item)}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition cursor-pointer"
+                >
+                  Pilih Ini Saja
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Peringatan: Belum Ada Tahun Ajaran Aktif */}
+      {activeList.length === 0 && !isLoading && (
+        <div className="bg-red-50 border border-red-300 rounded-2xl p-5 shadow-sm flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+            <AlertCircle size={20} />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-red-950">
+              Peringatan: Belum Ada Tahun Ajaran yang Aktif!
+            </h3>
+            <p className="text-xs text-red-800 mt-0.5">
+              Halaman login menampilkan pesan <em>"Tahun ajaran belum diatur — hubungi admin"</em> dan seluruh tombol login dinonaktifkan. Silakan klik <strong>"Jadikan Aktif"</strong> pada salah satu periode di tabel bawah.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Info Periode Aktif Saat Ini */}
       {activeItem && (

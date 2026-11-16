@@ -33,6 +33,11 @@ import {
   type KelasInfo,
   type PengaturanAktif,
 } from '../lib/authService';
+import {
+  subscribeTahunAjaranAktif,
+  formatTahunAjaranLabel,
+  type TahunAjaranDoc,
+} from '../lib/tahunAjaranService';
 
 // ─── Helper: Konversi KelasDoc → InfoRombelLogin ─────────────────────────────
 
@@ -58,8 +63,6 @@ function kelasDocToRombelLogin(k: KelasDoc): InfoRombelLogin {
 }
 
 const FALLBACK_18_KELAS_LOGIN: InfoRombelLogin[] = SEED_18_KELAS.map(kelasDocToRombelLogin);
-
-const FALLBACK_SEMESTER_LABEL = '2025/2026 Ganjil (aktif)';
 
 // ─── Komponen ────────────────────────────────────────────────────────────────
 
@@ -129,28 +132,28 @@ export const LoginPage: React.FC = () => {
       staleTime: 5 * 60 * 1000,
     });
 
-  // ── Ambil pengaturan semester aktif ───────────────────────────────────────
-  const { data: pengaturan, isLoading: isLoadingSemester } =
-    useQuery<PengaturanAktif>({
-      queryKey: ['pengaturanAktif', isFirebaseConfigured ? 'firebase' : 'local'],
-      queryFn: async () => {
-        if (isFirebaseConfigured) {
-          return getPengaturanAktifFirestore();
-        }
-        // Local fallback: baca dari callApi daftarKelasLogin
-        const res = await callApi<DaftarKelasLoginResponse>('daftarKelasLogin');
-        const aktif = res.daftarSemester?.find((s) => s.aktif);
-        if (aktif) {
-          return {
-            tahunAjaran: aktif.tahun,
-            semester:    aktif.semester,
-            label:       `${aktif.tahun} ${aktif.semester === 1 ? 'Ganjil' : 'Genap'} (aktif)`,
-          };
-        }
-        return { tahunAjaran: '2025/2026', semester: 1, label: FALLBACK_SEMESTER_LABEL };
-      },
-      staleTime: 5 * 60 * 1000,
+  // ── Ambil tahun ajaran & semester aktif secara realtime via onSnapshot ──
+  const [tahunAjaranAktif, setTahunAjaranAktif] = useState<TahunAjaranDoc | null | undefined>(undefined);
+
+  useEffect(() => {
+    const unsubscribe = subscribeTahunAjaranAktif((ta) => {
+      setTahunAjaranAktif(ta);
     });
+    return unsubscribe;
+  }, []);
+
+  const isLoadingSemester = tahunAjaranAktif === undefined;
+  const isSemesterValid = Boolean(tahunAjaranAktif);
+  const semesterLabel = formatTahunAjaranLabel(tahunAjaranAktif);
+
+  const pengaturan: PengaturanAktif | null = tahunAjaranAktif
+    ? {
+        tahunAjaran: tahunAjaranAktif.tahun,
+        semester: tahunAjaranAktif.semester === 'Genap' ? 2 : 1,
+        label: semesterLabel,
+        tahunAjaranId: tahunAjaranAktif.id,
+      }
+    : null;
 
   // Validasi pilihan rombel tersimpan
   useEffect(() => {
@@ -219,10 +222,15 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
+    if (!isSemesterValid || !pengaturan) {
+      triggerError('Tahun ajaran belum diatur — hubungi admin.', 'guruPass');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       let session;
-      if (isFirebaseConfigured && pengaturan) {
+      if (isFirebaseConfigured) {
         session = await loginWaliKelas(
           currentRombel.id,
           guruPassword,
@@ -235,8 +243,8 @@ export const LoginPage: React.FC = () => {
           rombel:       currentRombel.nama,
           kelas:        currentRombel.nama,
           password:     guruPassword,
-          tahun_ajaran: pengaturan?.tahunAjaran ?? '2025/2026',
-          semester:     pengaturan?.semester ?? 1,
+          tahun_ajaran: pengaturan.tahunAjaran,
+          semester:     pengaturan.semester,
         });
         session = res.session;
       }
@@ -276,10 +284,15 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
+    if (!isSemesterValid || !pengaturan) {
+      triggerError('Tahun ajaran belum diatur — hubungi admin.', 'gmPass');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       let session;
-      if (isFirebaseConfigured && pengaturan) {
+      if (isFirebaseConfigured) {
         session = await loginGuruMapel(guruMapelUsername.trim(), guruMapelPassword, pengaturan);
       } else {
         // Local fallback: cari akun guru mapel dari storage lokal
@@ -300,8 +313,9 @@ export const LoginPage: React.FC = () => {
           kelas: '',
           namaWali: gm.nama,
           nipWali: gm.nip,
-          tahunAjaran: pengaturan?.tahunAjaran ?? '2025/2026',
-          semester: (pengaturan?.semester ?? 1) as 1 | 2,
+          tahunAjaran: pengaturan.tahunAjaran,
+          semester: pengaturan.semester as 1 | 2,
+          tahunAjaranId: pengaturan.tahunAjaranId || '',
           fase: 'A' as const,
           kelasId: '',
           hanya_lihat: false,
@@ -335,6 +349,11 @@ export const LoginPage: React.FC = () => {
     }
     if (!adminPassword.trim()) {
       triggerError('Isi kata sandi terlebih dahulu.', 'adminPass');
+      return;
+    }
+
+    if (!isSemesterValid || !pengaturan) {
+      triggerError('Tahun ajaran belum diatur — hubungi admin.', 'adminPass');
       return;
     }
 
@@ -427,8 +446,9 @@ export const LoginPage: React.FC = () => {
             setErrorMsg('');
             setFocusedErrorField(null);
           }}
-          semesterLabel={pengaturan?.label ?? FALLBACK_SEMESTER_LABEL}
+          semesterLabel={semesterLabel}
           isLoadingSemester={isLoadingSemester}
+          isSemesterValid={isSemesterValid}
           guruPassword={guruPassword}
           onChangeGuruPassword={(val) => {
             setGuruPassword(val);

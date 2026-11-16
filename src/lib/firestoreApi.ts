@@ -107,20 +107,16 @@ export async function fetchAppDataFirestore(kelasId?: string): Promise<AppData> 
     }
   } catch {}
 
-  let activeTahunAjaranId = 'ta_2025_2026_ganjil';
-  try {
-    const aktSnap = await getDoc(doc(db, 'pengaturan', 'aktif'));
-    if (aktSnap.exists()) {
-      const ad = aktSnap.data();
-      if (ad.tahunAjaranId) activeTahunAjaranId = ad.tahunAjaranId;
-    }
-  } catch {}
-
-  // 2. Tahun Ajaran
+  // 2. Tahun Ajaran (Satu sumber kebenaran: dokumen tahunAjaran dengan aktif == true)
   let tahunAjaranList: any[] = [];
+  let activeTahunAjaranId = '';
   try {
     const taSnap = await getDocs(query(collection(db, 'tahunAjaran'), orderBy('tahun', 'desc')));
     tahunAjaranList = taSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const activeDoc = tahunAjaranList.find((t) => t.aktif);
+    if (activeDoc) {
+      activeTahunAjaranId = activeDoc.id;
+    }
   } catch {}
 
   // 3. Kelas / Rombel

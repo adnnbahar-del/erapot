@@ -32,9 +32,10 @@ interface GuruFormProps {
   onSubmit: (e: React.FormEvent) => void;
   isSubmitting: boolean;
   hasPasswordError?: boolean;
-  /** Label semester aktif dari pengaturan, mis. "2025/2026 Ganjil (aktif)" */
+  /** Label semester aktif dari dokumen tahunAjaran aktif */
   semesterLabel?: string;
   isLoadingSemester?: boolean;
+  isSemesterValid?: boolean;
 }
 
 export const GuruForm: React.FC<GuruFormProps> = ({
@@ -47,8 +48,9 @@ export const GuruForm: React.FC<GuruFormProps> = ({
   onSubmit,
   isSubmitting,
   hasPasswordError = false,
-  semesterLabel = '2025/2026 Ganjil (aktif)',
+  semesterLabel = '',
   isLoadingSemester = false,
+  isSemesterValid = true,
 }) => {
   const rombelSelectId = useId();
   const passwordInputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +88,12 @@ export const GuruForm: React.FC<GuruFormProps> = ({
     }
   );
 
-  const canSubmit = Boolean(currentRombel && currentRombel.ada_akun && currentRombel.nama_wali?.trim());
+  const canSubmit = Boolean(
+    currentRombel &&
+    currentRombel.ada_akun &&
+    currentRombel.nama_wali?.trim() &&
+    isSemesterValid
+  );
 
   return (
     <form
@@ -134,17 +141,25 @@ export const GuruForm: React.FC<GuruFormProps> = ({
         error={hasPasswordError}
       />
 
-      {/* 4. Info Semester Aktif (hanya info, bukan input) */}
+      {/* 4. Info Semester Aktif (hanya info murni, bukan dropdown) */}
       <div className="space-y-1">
         <label className="block text-xs font-bold uppercase tracking-[0.06em] text-muted select-none">
           TAHUN AJARAN &amp; SEMESTER
         </label>
-        <SemesterInfoBadge label={semesterLabel} isLoading={isLoadingSemester} />
+        <SemesterInfoBadge
+          label={semesterLabel}
+          isLoading={isLoadingSemester}
+          isError={!isSemesterValid}
+        />
       </div>
 
       {/* 5. Tombol Masuk */}
       <div className="pt-1">
-        <SubmitButton mode="guru" isSubmitting={isSubmitting} disabled={!canSubmit} />
+        <SubmitButton
+          mode="guru"
+          isSubmitting={isSubmitting}
+          disabled={!canSubmit}
+        />
       </div>
 
       {/* 6. Kaki Kartu */}

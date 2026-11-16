@@ -33,6 +33,7 @@ import {
 import { auth, db, isFirebaseConfigured } from './firebase';
 export { isFirebaseConfigured };
 import { callApi } from './api';
+import { getTahunAjaranAktif } from './tahunAjaranService';
 import type { UserSession, Semester } from '../types';
 import { formatWaliEmail, formatGuruMapelEmail, getLocalKelasList } from './kelasService';
 
@@ -64,9 +65,10 @@ export interface KelasInfo {
 }
 
 export interface PengaturanAktif {
-  tahunAjaran: string;   // '2025/2026'
+  tahunAjaran: string;   // e.g. '2026/2027'
   semester: Semester;    // 1 | 2
-  label: string;         // '2025/2026 Ganjil (aktif)'
+  label: string;         // 'Tahun Ajaran 2026/2027 · Semester Genap (aktif)'
+  tahunAjaranId?: string;
 }
 
 // ─── Rate Limiter (client-side, berbasis localStorage) ───────────────────────
@@ -172,17 +174,17 @@ export async function getKelasAktifFirestore(): Promise<KelasInfo[]> {
 
 // ─── Firebase Auth: Ambil Pengaturan Aktif ───────────────────────────────────
 
-export async function getPengaturanAktifFirestore(): Promise<PengaturanAktif> {
-  const snap = await getDoc(doc(db, 'pengaturan', 'aktif'));
-  if (!snap.exists()) {
-    return { tahunAjaran: '2025/2026', semester: 1, label: '2025/2026 Ganjil (aktif)' };
+export async function getPengaturanAktifFirestore(): Promise<PengaturanAktif | null> {
+  const ta = await getTahunAjaranAktif();
+  if (!ta) {
+    return null;
   }
-  const d = snap.data() as any;
-  const semLabel = d.semester === 1 ? 'Ganjil' : 'Genap';
+  const semAngka = ta.semester === 'Genap' ? 2 : 1;
   return {
-    tahunAjaran: d.tahunAjaran ?? '2025/2026',
-    semester:    (d.semester ?? 1) as Semester,
-    label:       `${d.tahunAjaran ?? '2025/2026'} ${semLabel} (aktif)`,
+    tahunAjaran: ta.tahun,
+    semester:    semAngka as Semester,
+    label:       `Tahun Ajaran ${ta.tahun} · Semester ${ta.semester} (aktif)`,
+    tahunAjaranId: ta.id,
   };
 }
 
@@ -330,6 +332,7 @@ export async function loginWaliKelas(
         nipWali: localUserData?.nip || kelas.nipWali,
         tahunAjaran: pengaturan.tahunAjaran,
         semester: pengaturan.semester,
+        tahunAjaranId: pengaturan.tahunAjaranId || '',
         fase: kelas.fase ?? faseDariTingkat(kelas.tingkat),
         kelasId,
         hanya_lihat: false,
@@ -380,6 +383,7 @@ export async function loginWaliKelas(
     nipWali:     kelas.nipWali,
     tahunAjaran: pengaturan.tahunAjaran,
     semester:    pengaturan.semester,
+    tahunAjaranId: pengaturan.tahunAjaranId || '',
     fase:        kelas.fase ?? faseDariTingkat(kelas.tingkat),
     kelasId,
     hanya_lihat: false,
@@ -461,6 +465,7 @@ export async function loginGuruMapel(
     nipWali:     userData?.nip || '',
     tahunAjaran: pengaturan.tahunAjaran,
     semester:    pengaturan.semester,
+    tahunAjaranId: pengaturan.tahunAjaranId || '',
     fase:        'A',
     kelasId:     (userData?.kelasIds && userData.kelasIds[0]) || '',
     hanya_lihat: false,
@@ -546,6 +551,13 @@ export async function loginAdmin(
     throw new Error('Akun ini belum terdaftar sebagai admin.');
   }
 
+  const taAktif = await getTahunAjaranAktif();
+  if (!taAktif) {
+    await firebaseSignOut(auth);
+    rlFail(rlKey);
+    throw new Error('Tahun ajaran belum diatur — hubungi admin.');
+  }
+
   rlClear(rlKey);
 
   return {
@@ -554,8 +566,9 @@ export async function loginAdmin(
     username:    uData.username || cleanInput,
     kelas:       '',
     namaWali:    uData.nama || 'Administrator',
-    tahunAjaran: '2025/2026',
-    semester:    1,
+    tahunAjaran: taAktif.tahun,
+    semester:    taAktif.semester === 'Genap' ? 2 : 1,
+    tahunAjaranId: taAktif.id,
     fase:        'C',
     kelasId:     '',
     hanya_lihat: false,

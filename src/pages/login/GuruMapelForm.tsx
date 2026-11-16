@@ -16,6 +16,7 @@ interface GuruMapelFormProps {
   isSubmitting: boolean;
   hasUserError?: boolean;
   hasPasswordError?: boolean;
+  isSemesterValid?: boolean;
 }
 
 export const GuruMapelForm: React.FC<GuruMapelFormProps> = ({
@@ -27,6 +28,7 @@ export const GuruMapelForm: React.FC<GuruMapelFormProps> = ({
   isSubmitting,
   hasUserError = false,
   hasPasswordError = false,
+  isSemesterValid = true,
 }) => {
   const usernameId = useId();
   const passwordInputRef = useRef<HTMLInputElement>(null);
@@ -69,7 +71,7 @@ export const GuruMapelForm: React.FC<GuruMapelFormProps> = ({
 
       {/* 3. Tombol Masuk */}
       <div className="pt-1">
-        <SubmitButton mode="guru" isSubmitting={isSubmitting} />
+        <SubmitButton mode="guru_mapel" isSubmitting={isSubmitting} disabled={isSemesterValid === false} />
       </div>
 
       {/* 4. Kaki Kartu */}

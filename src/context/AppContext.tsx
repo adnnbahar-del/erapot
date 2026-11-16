@@ -85,7 +85,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsClassFinalized(false);
       return;
     }
-    const currentTAId = session.tahunAjaranId || 'ta_2025_1';
+    const currentTAId = session.tahunAjaranId || data?.activeTahunAjaranId || (data?.tahunAjaran?.find(t => t.aktif)?.id) || '';
     try {
       const fin = await getStatusFinalisasi(session.kelasId, currentTAId);
       setIsClassFinalized(fin?.status === 'final');
@@ -282,7 +282,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setHasUnsavedChanges(true);
       setSaveStatusText('Menunggu antrean simpan…');
 
-      const currentTAId = session?.tahunAjaranId || (data ? data.activeTahunAjaranId : 'ta_2025_1');
+      const currentTAId = session?.tahunAjaranId || data?.activeTahunAjaranId || (data?.tahunAjaran?.find(t => t.aktif)?.id) || '';
       const enrichedItems = items.map((it) => ({
         ...it,
         tahun_ajaran_id: it.tahun_ajaran_id || currentTAId,

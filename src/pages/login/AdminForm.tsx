@@ -16,6 +16,7 @@ interface AdminFormProps {
   isSubmitting: boolean;
   hasUserError?: boolean;
   hasPasswordError?: boolean;
+  isSemesterValid?: boolean;
 }
 
 export const AdminForm: React.FC<AdminFormProps> = ({
@@ -27,6 +28,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
   isSubmitting,
   hasUserError = false,
   hasPasswordError = false,
+  isSemesterValid = true,
 }) => {
   const usernameId = useId();
   const passwordInputRef = useRef<HTMLInputElement>(null);
@@ -69,7 +71,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
 
       {/* 3. Tombol Masuk */}
       <div className="pt-1">
-        <SubmitButton mode="admin" isSubmitting={isSubmitting} />
+        <SubmitButton mode="admin" isSubmitting={isSubmitting} disabled={isSemesterValid === false} />
       </div>
 
       {/* 4. Kaki Kartu — kontras WCAG AA (#4b5572 ≈ 4.6:1 di atas putih) */}

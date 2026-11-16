@@ -1,5 +1,5 @@
 // src/lib/tahunAjaranService.ts
-// Layanan pengelolaan Tahun Ajaran & Semester (Tahap 3)
+// Layanan pengelolaan Tahun Ajaran & Semester
 // Koleksi Firestore: `tahunAjaran`
 //   { id, tahun: "2025/2026", semester: "Ganjil" | "Genap", aktif: boolean, status: "berjalan" | "ditutup", tanggal_rapor?: string, createdAt, updatedAt }
 
@@ -12,8 +12,10 @@ import {
   updateDoc,
   deleteDoc,
   query,
+  where,
   orderBy,
   writeBatch,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from './firebase';
 import type { Semester, SemesterNama, StatusTahunAjaran } from '../types';
@@ -92,7 +94,7 @@ function getLocalTAList(): TahunAjaranDoc[] {
 function saveLocalTAList(list: TahunAjaranDoc[]) {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
-  } catch {}
+  } catch { }
 }
 
 export function semesterNamaToAngka(sem: SemesterNama | Semester): Semester {
@@ -103,6 +105,15 @@ export function semesterNamaToAngka(sem: SemesterNama | Semester): Semester {
 export function semesterAngkaToNama(sem: SemesterNama | Semester): SemesterNama {
   if (sem === 2 || sem === 'Genap') return 'Genap';
   return 'Ganjil';
+}
+
+/**
+ * Format teks label tahun ajaran untuk UI:
+ * "Tahun Ajaran 2026/2027 · Semester Genap (aktif)"
+ */
+export function formatTahunAjaranLabel(ta: TahunAjaranDoc | null | undefined): string {
+  if (!ta) return 'Tahun ajaran belum diatur — hubungi admin';
+  return `Tahun Ajaran ${ta.tahun} · Semester ${ta.semester} (aktif)`;
 }
 
 /** Ambil semua daftar tahun ajaran */
@@ -131,15 +142,84 @@ export async function getAllTahunAjaran(): Promise<TahunAjaranDoc[]> {
   }
 }
 
-/** Ambil tahun ajaran yang sedang aktif */
-export async function getTahunAjaranAktif(): Promise<TahunAjaranDoc> {
-  const list = await getAllTahunAjaran();
-  const aktif = list.find((item) => item.aktif);
-  return aktif || list[0] || DEFAULT_TA_LIST[2];
+/**
+ * Ambil dokumen tahun ajaran yang sedang aktif (aktif == true).
+ * Mengembalikan null jika tidak ada tahun ajaran yang aktif.
+ */
+export async function getTahunAjaranAktif(): Promise<TahunAjaranDoc | null> {
+  if (!isFirebaseConfigured) {
+    const list = getLocalTAList();
+    return list.find((item) => item.aktif) || null;
+  }
+
+  try {
+    const q = query(collection(db, 'tahunAjaran'), where('aktif', '==', true));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      return null;
+    }
+    const activeDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TahunAjaranDoc));
+    // Jika ada lebih dari satu, urutkan berdasarkan updatedAt terbaru
+    activeDocs.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    return activeDocs[0];
+  } catch (err) {
+    console.error('Gagal mengambil tahun ajaran aktif dari Firestore:', err);
+    return null;
+  }
 }
 
-/** Menetapkan satu tahun ajaran sebagai aktif, dan menonaktifkan yang lain */
+export interface SubscribeTahunAjaranAktifMeta {
+  ganda: boolean;
+  listGanda: TahunAjaranDoc[];
+}
+
+/**
+ * Berlangganan (realtime listener onSnapshot) ke tahun ajaran yang aktif.
+ * Mengembalikan fungsi unsubscribe.
+ */
+export function subscribeTahunAjaranAktif(
+  callback: (ta: TahunAjaranDoc | null, meta: SubscribeTahunAjaranAktifMeta) => void
+): () => void {
+  if (!isFirebaseConfigured) {
+    const local = getLocalTAList();
+    const activeDocs = local.filter((it) => it.aktif);
+    const primary = activeDocs[0] || null;
+    callback(primary, { ganda: activeDocs.length > 1, listGanda: activeDocs });
+    return () => { };
+  }
+
+  const q = query(collection(db, 'tahunAjaran'), where('aktif', '==', true));
+  return onSnapshot(
+    q,
+    (snap) => {
+      if (snap.empty) {
+        callback(null, { ganda: false, listGanda: [] });
+        return;
+      }
+      const activeDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TahunAjaranDoc));
+      if (activeDocs.length > 1) {
+        activeDocs.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        callback(activeDocs[0], { ganda: true, listGanda: activeDocs });
+      } else {
+        callback(activeDocs[0], { ganda: false, listGanda: activeDocs });
+      }
+    },
+    (err) => {
+      console.error('Error onSnapshot tahunAjaran:', err);
+      callback(null, { ganda: false, listGanda: [] });
+    }
+  );
+}
+
+/**
+ * Menetapkan satu tahun ajaran sebagai aktif, dan menonaktifkan yang lain dalam SATU writeBatch.
+ * Validasi ketat: Hanya SATU dokumen yang boleh aktif.
+ */
 export async function setTahunAjaranAktif(id: string): Promise<TahunAjaranDoc> {
+  if (!id) {
+    throw new Error('ID tahun ajaran wajib diisi.');
+  }
+
   const now = new Date().toISOString();
   let targetItem: TahunAjaranDoc | undefined;
 
@@ -150,7 +230,13 @@ export async function setTahunAjaranAktif(id: string): Promise<TahunAjaranDoc> {
     snap.docs.forEach((docItem) => {
       const isTarget = docItem.id === id;
       if (isTarget) {
-        targetItem = { ...(docItem.data() as TahunAjaranDoc), id: docItem.id, aktif: true, status: 'berjalan', updatedAt: now };
+        targetItem = {
+          ...(docItem.data() as TahunAjaranDoc),
+          id: docItem.id,
+          aktif: true,
+          status: 'berjalan',
+          updatedAt: now,
+        };
         batch.update(docItem.ref, { aktif: true, status: 'berjalan', updatedAt: now });
       } else {
         batch.update(docItem.ref, { aktif: false, updatedAt: now });
@@ -158,21 +244,25 @@ export async function setTahunAjaranAktif(id: string): Promise<TahunAjaranDoc> {
     });
 
     if (targetItem) {
-      // Sinkronkan dokumen pengaturan/aktif
+      // Sinkronkan dokumen pengaturan/aktif untuk backward compatibility
       const semAngka = semesterNamaToAngka(targetItem.semester);
-      batch.set(doc(db, 'pengaturan', 'aktif'), {
-        tahunAjaran: targetItem.tahun,
-        semester: semAngka,
-        tahunAjaranId: targetItem.id,
-        label: `${targetItem.tahun} ${targetItem.semester} (aktif)`,
-        updatedAt: now,
-      }, { merge: true });
+      batch.set(
+        doc(db, 'pengaturan', 'aktif'),
+        {
+          tahunAjaran: targetItem.tahun,
+          semester: semAngka,
+          tahunAjaranId: targetItem.id,
+          label: `${targetItem.tahun} ${targetItem.semester} (aktif)`,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
     }
 
     await batch.commit();
   }
 
-  // Selalu sinkronkan ke local storage juga
+  // Sinkronkan ke local storage
   const localList = getLocalTAList();
   const updatedList = localList.map((item) => {
     if (item.id === id) {
@@ -194,7 +284,7 @@ export async function setTahunAjaranAktif(id: string): Promise<TahunAjaranDoc> {
           tahun_ajaran_id: targetItem.id,
         })
       );
-    } catch {}
+    } catch { }
   }
 
   if (!targetItem) {
@@ -202,6 +292,36 @@ export async function setTahunAjaranAktif(id: string): Promise<TahunAjaranDoc> {
   }
 
   return targetItem;
+}
+
+/**
+ * Menonaktifkan SEMUA tahun ajaran (dipakai untuk skenario darurat atau pengujian validasi)
+ */
+export async function nonaktifkanSemuaTahunAjaran(): Promise<void> {
+  const now = new Date().toISOString();
+  if (isFirebaseConfigured) {
+    const snap = await getDocs(collection(db, 'tahunAjaran'));
+    const batch = writeBatch(db);
+    snap.docs.forEach((d) => {
+      batch.update(d.ref, { aktif: false, updatedAt: now });
+    });
+    batch.delete(doc(db, 'pengaturan', 'aktif'));
+    await batch.commit();
+  }
+
+  const local = getLocalTAList().map((it) => ({ ...it, aktif: false, updatedAt: now }));
+  saveLocalTAList(local);
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_PENGATURAN_KEY);
+  } catch { }
+}
+
+/**
+ * Perbaiki jika ada beberapa tahun ajaran aktif ganda:
+ * Memilih satu sebagai aktif dan menonaktifkan yang lain.
+ */
+export async function perbaikiTahunAjaranGanda(pilihanId: string): Promise<TahunAjaranDoc> {
+  return await setTahunAjaranAktif(pilihanId);
 }
 
 /** Tambah tahun ajaran baru */
@@ -229,21 +349,44 @@ export async function tambahTahunAjaran(input: {
   };
 
   if (isFirebaseConfigured) {
-    await setDoc(doc(db, 'tahunAjaran', id), newItem);
+    if (input.aktif) {
+      // Jika dijadikan aktif, nonaktifkan dokumen lain dalam batch yang sama
+      const snap = await getDocs(collection(db, 'tahunAjaran'));
+      const batch = writeBatch(db);
+      snap.docs.forEach((docItem) => {
+        batch.update(docItem.ref, { aktif: false, updatedAt: now });
+      });
+      batch.set(doc(db, 'tahunAjaran', id), newItem);
+
+      const semAngka = semesterNamaToAngka(cleanSem);
+      batch.set(
+        doc(db, 'pengaturan', 'aktif'),
+        {
+          tahunAjaran: cleanTahun,
+          semester: semAngka,
+          tahunAjaranId: id,
+          label: `${cleanTahun} ${cleanSem} (aktif)`,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+      await batch.commit();
+    } else {
+      await setDoc(doc(db, 'tahunAjaran', id), newItem);
+    }
   }
 
   const localList = getLocalTAList();
   const existingIdx = localList.findIndex((it) => it.id === id);
+  if (input.aktif) {
+    localList.forEach((it) => (it.aktif = false));
+  }
   if (existingIdx >= 0) {
     localList[existingIdx] = newItem;
   } else {
     localList.push(newItem);
   }
   saveLocalTAList(localList);
-
-  if (input.aktif) {
-    return await setTahunAjaranAktif(id);
-  }
 
   return newItem;
 }
@@ -264,4 +407,3 @@ export async function updateStatusTahunAjaran(id: string, status: StatusTahunAja
     saveLocalTAList(list);
   }
 }
-

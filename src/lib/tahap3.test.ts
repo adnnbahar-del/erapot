@@ -81,7 +81,8 @@ describe('Tahap 3 — Tahun Ajaran & Semester Service', () => {
     expect(newDoc.aktif).toBe(true);
 
     const active = await getTahunAjaranAktif();
-    expect(active.id).toBe(newDoc.id);
+    expect(active).not.toBeNull();
+    expect(active?.id).toBe(newDoc.id);
 
     const list = await getAllTahunAjaran();
     const others = list.filter((ta) => ta.id !== newDoc.id);
